@@ -1,0 +1,182 @@
+---
+title: DeepKeep AI Firewall integration
+description: Integrate with the DeepKeep AI Firewall middleware using LangChain Python.
+integration:
+  name: DeepKeep AI Firewall
+  pypi: langchain-deepkeep
+  available: Pre-moderation, post-moderation
+  source: "[`langchain-deepkeep`](https://pypi.org/project/langchain-deepkeep/)"
+---
+
+DeepKeep AI Firewall middleware screens agent traffic before and after model calls. Use it to apply DeepKeep guardrails to user input before it reaches the model and to model output before it is returned to the user.
+
+## Overview
+
+| Middleware | Description |
+|------------|-------------|
+| `DeepKeepMiddleware` | Applies DeepKeep pre-moderation and post-moderation around each agent model call |
+
+DeepKeep supports two moderation stages:
+
+- **Pre-moderation**: Evaluates user input before the model call.
+- **Post-moderation**: Evaluates model output before the response is returned.
+
+For both stages, the DeepKeep API returns `flagged`, `risk_level`, `request_id`, `latency_ms`, and per-guardrail details in `verbosity`.
+
+## Setup
+
+To use DeepKeep, you need a DeepKeep API key, a base URL for your DeepKeep environment, and at least one firewall ID.
+
+### Credentials
+
+```python
+import getpass
+import os
+
+if "DEEPKEEP_API_KEY" not in os.environ:
+    os.environ["DEEPKEEP_API_KEY"] = getpass.getpass("Enter your DeepKeep API key: ")
+
+if "DEEPKEEP_BASE_URL" not in os.environ:
+    os.environ["DEEPKEEP_BASE_URL"] = getpass.getpass("Enter your DeepKeep base URL: ")
+```
+
+### Installation
+
+<CodeGroup>
+    ```python pip
+    pip install -U langchain-deepkeep
+    ```
+    ```python uv
+    uv add langchain-deepkeep
+    ```
+</CodeGroup>
+
+## Instantiation
+
+Create `DeepKeepMiddleware` with one or both firewall IDs. The `pre_model` value is sent to the pre-moderation endpoint as `model`, and the `post_model` value is sent to the post-moderation endpoint as `model`.
+
+```python
+import os
+
+from langchain_deepkeep import DeepKeepMiddleware
+
+middleware = DeepKeepMiddleware(
+    api_key=os.environ["DEEPKEEP_API_KEY"],
+    base_url=os.environ["DEEPKEEP_BASE_URL"],
+    pre_model="input-firewall-id",
+    post_model="output-firewall-id",
+)
+```
+
+`pre_model` and `post_model` can reference different DeepKeep firewalls. To run only one moderation stage, omit the other value.
+
+## Use with an agent
+
+Pass the middleware to `create_agent`:
+
+```python
+import os
+
+from langchain.agents import create_agent
+from langchain_deepkeep import DeepKeepMiddleware
+
+agent = create_agent(
+    model="gpt-5.5",
+    tools=[],
+    middleware=[
+        DeepKeepMiddleware(
+            api_key=os.environ["DEEPKEEP_API_KEY"],
+            base_url=os.environ["DEEPKEEP_BASE_URL"],
+            pre_model="input-firewall-id",
+            post_model="output-firewall-id",
+        )
+    ],
+)
+
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "What is the weather like today?"}]}
+)
+```
+
+## Moderation behavior
+
+DeepKeep returns a verdict for each moderation call. The middleware handles guardrail actions as follows:
+
+| Guardrail action | Pre-moderation behavior | Post-moderation behavior |
+|------------------|-------------------------|--------------------------|
+| `block` | Stops before the model call and returns a DeepKeep moderation message with `flagged=true` metadata | Suppresses the model output and returns a DeepKeep moderation message with `flagged=true` metadata |
+| `redact` / `modify` | Sends the modified user content to the model | Returns the modified model output |
+| `alert` | Continues with the original user content | Returns the original model output |
+
+The middleware does not raise an exception for blocked content and does not perform built-in alert logging. Use `request_id` for tracing or audit correlation and `latency_ms` for monitoring.
+
+## Configuration
+
+<ParamField body="api_key" type="str | None">
+    DeepKeep API key. If omitted, the middleware reads `DEEPKEEP_API_KEY`.
+</ParamField>
+
+<ParamField body="base_url" type="str | None">
+    Base URL for your DeepKeep environment. If omitted, the middleware reads `DEEPKEEP_BASE_URL`.
+</ParamField>
+
+<ParamField body="pre_model" type="str | None">
+    Firewall ID used for pre-moderation. The value is sent as the `model` field to `/api/v3/openai/moderations/pre`.
+</ParamField>
+
+<ParamField body="post_model" type="str | None">
+    Firewall ID used for post-moderation. The value is sent as the `model` field to `/api/v3/openai/moderations/post`.
+</ParamField>
+
+<ParamField body="title" type="str" default="">
+    Optional title sent to DeepKeep. If omitted, DeepKeep derives it from the prompt.
+</ParamField>
+
+<ParamField body="chat" type="str" default="">
+    Optional chat or conversation ID sent to DeepKeep. If omitted, DeepKeep creates a conversation.
+</ParamField>
+
+<ParamField body="timeout" type="float" default="30.0">
+    HTTP timeout in seconds for DeepKeep API calls.
+</ParamField>
+
+At least one of `pre_model` or `post_model` is required.
+
+## Error handling
+
+DeepKeep API and network errors are raised as `DeepKeepAPIError`. The exception exposes `status_code` for HTTP errors and `None` for network failures.
+
+```python
+from langchain_deepkeep import DeepKeepAPIError
+
+try:
+    result = agent.invoke({"messages": [{"role": "user", "content": user_input}]})
+except DeepKeepAPIError as error:
+    print(error.status_code)
+    raise
+```
+
+Common DeepKeep API errors include:
+
+| Status code | Meaning |
+|-------------|---------|
+| `404` | No firewall with the provided identifier |
+| `422` | Request validation error |
+| `500` | Unexpected moderation error |
+
+## See also
+
+- [LangChain middleware overview](/oss/python/langchain/middleware/overview)
+- [DeepKeep AI](https://deepkeep.ai)
+- [`langchain-deepkeep` on PyPI](https://pypi.org/project/langchain-deepkeep/)
+
+---
+
+<div className="source-links">
+<Callout icon="terminal-2">
+    [Connect these docs](/use-these-docs) to Claude, VSCode, and more via MCP for real-time answers.
+</Callout>
+<Callout icon="edit">
+    [Edit this page on GitHub](https://github.com/langchain-ai/docs/edit/main/src/oss/python/integrations/middleware/deepkeep.mdx) or [file an issue](https://github.com/langchain-ai/docs/issues/new/choose).
+</Callout>
+</div>
